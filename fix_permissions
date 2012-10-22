@@ -27,7 +27,8 @@
 # v2.03 - fixed chown group ownership output [Kastro]
 # v2.04 - replaced /system/sd with $SD_EXT_DIRECTORY [Firerat]
 # v2.05 - added check for location of packages.xml [FlorentBL and Teknowledgist]
-VERSION="2.05"
+# v2.06 - added SED before each CUT -d ' ' to shrink multiple spaces
+VERSION="2.06"
 
 # Defaults
 DEBUG=0 # Debug off by default
@@ -74,7 +75,7 @@ SYSMOUNT=0
 DATAMOUNT=0
 SYSSDMOUNT=0
 for packdir in /dbdata/system /data/system; do
-  [[ -f "${packdir}/packages.xml" ]] && break
+  $TEST -f "${packdir}/packages.xml" && break
 done
 PACKAGES="${packdir}/packages.xml"
 
@@ -182,14 +183,21 @@ fp_start()
 {
    if $TEST $SIMULATE -eq 0 ; then
       if $TEST $( $GREP -c " /system " "/proc/mounts" ) -ne 0; then
-         DEVICE=$( $GREP " /system " "/proc/mounts" | $CUT -d ' ' -f1 )
+         DEVICE=$( $GREP " /system " "/proc/mounts" | $SED 's/ \+/ /g' | $CUT -d ' ' -f1 )
          if $TEST $DEBUG -eq 1; then
             fp_print "/system mounted on $DEVICE"
          fi
-         if $TEST $( $GREP " /system " "/proc/mounts" | $GREP -c " ro " ) -ne 0; then
+         if $TEST $( $GREP " /system " "/proc/mounts" | $GREP -c " ro[ ,]" ) -ne 0; then
+            if $TEST $DEBUG -eq 1; then
+                fp_print "/system is readonly, remounting readwrite"
+            fi
             $MOUNT -o remount,rw $DEVICE /system
             SYSREMOUNT=1
-         fi
+        else
+            if $TEST $DEBUG -eq 1; then
+                fp_print "/system is readwrite already"
+            fi
+        fi
       else
          $MOUNT /system > /dev/null 2>&1
          SYSMOUNT=1
@@ -254,7 +262,7 @@ fp_chown_gid()
 fp_chmod()
 {
    FP_OLDPER=$1
-   FP_OLDPER=$( $ECHO $FP_OLDPER | cut -c2-10 )
+   FP_OLDPER=$( $ECHO $FP_OLDPER | $CUT -c2-10 )
    FP_PERSTR=$2
    FP_PERNUM=$3
    FP_FILE=$4
@@ -316,11 +324,11 @@ fp_package()
       fp_print "Processing ($curnum of $endnum): $PACKAGE..."
       
       #lets get existing permissions of CODEPATH
-      OLD_UGD=$( $LS -ln "$CODEPATH" )
-      OLD_PER=$( $ECHO $OLD_UGD | $CUT -d ' ' -f1 )
-      OLD_UID=$( $ECHO $OLD_UGD | $CUT -d ' ' -f3 )
-      OLD_GID=$( $ECHO $OLD_UGD | $CUT -d ' ' -f4 )
-      
+      OLD_UGD=$( $LS -l -n "$CODEPATH" )
+      OLD_PER=$( $ECHO $OLD_UGD | $SED 's/ \+/ /g' | $CUT -d ' ' -f1 )
+      OLD_UID=$( $ECHO $OLD_UGD | $SED 's/ \+/ /g' | $CUT -d ' ' -f3 )
+      OLD_GID=$( $ECHO $OLD_UGD | $SED 's/ \+/ /g' | $CUT -d ' ' -f4 )
+
       #apk source dirs
       if $TEST "$APPDIR" = "/system/app"; then
          #skip system apps if set
@@ -355,12 +363,12 @@ fp_package()
    #the data/data for the package
    if $TEST -d "/data/data/$PACKAGE"; then
       #find all directories in /data/data/$PACKAGE
-      $FIND /data/data/$PACKAGE -type d -exec $LS -ldn {} \; | while read dataline; do
+      $FIND /data/data/"$PACKAGE" -type d -exec $LS -ldn "{}" \; | while read dataline; do
          #get existing permissions of that directory
-         OLD_PER=$( $ECHO $dataline | $CUT -d ' ' -f1 )
-         OLD_UID=$( $ECHO $dataline | $CUT -d ' ' -f3 )
-         OLD_GID=$( $ECHO $dataline | $CUT -d ' ' -f4 )
-         FILEDIR=$( $ECHO $dataline | $CUT -d ' ' -f9 )
+         OLD_PER=$( $ECHO $dataline | $SED 's/ \+/ /g' | $CUT -d ' ' -f1 )
+         OLD_UID=$( $ECHO $dataline | $SED 's/ \+/ /g' | $CUT -d ' ' -f3 )
+         OLD_GID=$( $ECHO $dataline | $SED 's/ \+/ /g' | $CUT -d ' ' -f4 )
+         FILEDIR=$( $ECHO $dataline | $SED 's/ \+/ /g' | $CUT -d ' ' -f9- )
          FOURDIR=$( $ECHO $FILEDIR | $CUT -d '/' -f5 )
          
          #set defaults for iteration
@@ -417,23 +425,23 @@ fp_package()
          fi
          
          #if any files exist in directory with improper permissions reset them
-         $FIND $FILEDIR -type f -maxdepth 1 ! -perm $REVPERM -exec $LS -ln {} \; | while read subline; do
-            OLD_PER=$( $ECHO $subline | $CUT -d ' ' -f1 )
-            SUBFILE=$( $ECHO $subline | $CUT -d ' ' -f9 )
+         $FIND "$FILEDIR" -type f -maxdepth 1 ! -perm $REVPERM -exec $LS -ln "{}" \; | while read subline; do
+            OLD_PER=$( $ECHO $subline | $SED 's/ \+/ /g' | $CUT -d ' ' -f1 )
+            SUBFILE=$( $ECHO $subline | $SED 's/ \+/ /g' | $CUT -d ' ' -f9 )
             fp_chmod $OLD_PER $REVPSTR $REVPERM "$SUBFILE"
          done
          
          #if any files exist in directory with improper user reset them
-         $FIND $FILEDIR -type f -maxdepth 1 ! -user $REVUID -exec $LS -ln {} \; | while read subline; do
-            OLD_UID=$( $ECHO $subline | $CUT -d ' ' -f3 )
-            SUBFILE=$( $ECHO $subline | $CUT -d ' ' -f9 )
+         $FIND "$FILEDIR" -type f -maxdepth 1 ! -user $REVUID -exec $LS -ln "{}" \; | while read subline; do
+            OLD_UID=$( $ECHO $subline | $SED 's/ \+/ /g' | $CUT -d ' ' -f3 )
+            SUBFILE=$( $ECHO $subline | $SED 's/ \+/ /g' | $CUT -d ' ' -f9 )
             fp_chown_uid $OLD_UID $REVUID "$SUBFILE"
          done
          
          #if any files exist in directory with improper group reset them
-         $FIND $FILEDIR -type f -maxdepth 1 ! -group $REVGID -exec $LS -ln {} \; | while read subline; do
-            OLD_GID=$( $ECHO $subline | $CUT -d ' ' -f4 )
-            SUBFILE=$( $ECHO $subline | $CUT -d ' ' -f9 )
+         $FIND "$FILEDIR" -type f -maxdepth 1 ! -group $REVGID -exec $LS -ln "{}" \; | while read subline; do
+            OLD_GID=$( $ECHO $subline | $SED 's/ \+/ /g' | $CUT -d ' ' -f4 )
+            SUBFILE=$( $ECHO $subline | $SED 's/ \+/ /g' | $CUT -d ' ' -f9 )
             fp_chown_gid $OLD_GID $REVGID "$SUBFILE"
          done
       done
@@ -455,6 +463,9 @@ date_diff()
 fp_end()
 {
    if $TEST $SYSREMOUNT -eq 1; then
+      if $TEST $DEBUG -eq 1; then
+        fp_print "Remounting /system readonly"
+      fi
       $MOUNT -o remount,ro $DEVICE /system > /dev/null 2>&1
    fi
    
